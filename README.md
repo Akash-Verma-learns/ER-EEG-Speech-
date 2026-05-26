@@ -2,9 +2,10 @@ How to run
 
 pip install -r requirements.txt
 
-# 1. Build processed data (implement DatasetBuilder.build_subject() calls for your dataset)
-# 2. Run all four models with 5-fold CV:
+1. Build processed data (implement DatasetBuilder.build_subject() calls for your dataset)
+2. Run all four models with 5-fold CV:
 python main.py --data_dir ./data --output_dir ./outputs --n_classes 4
+
 Key architectural choices implemented
 Component	Implementation
 ON-LSTM	cumax = cumsum(softmax(x)) master gates enforcing ordered-neuron constraint
