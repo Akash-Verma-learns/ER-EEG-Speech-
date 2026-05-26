@@ -1,22 +1,15 @@
-ml_last_hopefully/
-├── config.py                      # All hyperparameters as dataclasses
-├── requirements.txt
-├── main.py                        # CLI entry point — runs all 4 models + McNemar tests
-├── preprocessing/
-│   ├── eeg_preprocessor.py        # Butterworth BPF → DE features → 8×9 spatial grid
-│   ├── speech_preprocessor.py     # Wiener filter → MFCC+CHROMA+MEL (180-D)
-│   └── ga_selector.py             # GA with SVM fitness proxy, runs per-modality
-├── models/
-│   ├── on_lstm.py                 # ON-LSTM cell (cumax ordered-neuron gates)
-│   ├── eeg_encoder.py             # DS-CNN 2D + ON-LSTM → Y_EEG ∈ ℝ¹²⁸
-│   ├── speech_encoder.py          # Frozen Wav2Vec2 → chunked DS-CNN → Transformer → Y_Sp ∈ ℝ²⁵⁶
-│   ├── early_fusion.py            # Shared 1D DS-CNN + self-attention → Z_early ∈ ℝ²⁵⁶
-│   ├── late_fusion.py             # CrossModalAttention + learnable α gates → Z_late ∈ ℝ²⁵⁶
-│   └── unimodal_heads.py          # EEGClassifier, SpeechClassifier wrappers
-├── datasets/
-│   └── data_loader.py             # 4 Dataset classes + DatasetBuilder (raw → .npy)
-├── training/
-│   ├── trainer.py                 # Trainer (Adam + CosineAnnealingLR)
-│   └── cross_validation.py        # run_cv + run_cv_late_fusion (two-phase)
-└── evaluation/
-    └── statistical_tests.py       # McNemar's test + pairwise comparison table
+How to run
+
+pip install -r requirements.txt
+
+# 1. Build processed data (implement DatasetBuilder.build_subject() calls for your dataset)
+# 2. Run all four models with 5-fold CV:
+python main.py --data_dir ./data --output_dir ./outputs --n_classes 4
+Key architectural choices implemented
+Component	Implementation
+ON-LSTM	cumax = cumsum(softmax(x)) master gates enforcing ordered-neuron constraint
+Speech encoder	Wav2Vec2 hidden states chunked → DS-CNN per chunk → Transformer across chunks
+Late fusion phase 1	Encoders trained independently with their own heads
+Late fusion phase 2	Encoders frozen, only CrossModalAttention + GatedModalityWeighting trained
+α gates	Learnable scalars via sigmoid(log_alpha_eeg/sp) — inspectable at inference for valence/arousal analysis
+GA fitness	Acc − 0.1 × (n_selected / n_total), parallel SVM 3-fold CV per individual
