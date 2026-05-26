@@ -3,12 +3,16 @@ from .data_loader import (
     SpeechDataset,
     EarlyFusionDataset,
     LateFusionDataset,
-    DatasetBuilder,
-    load_all_subjects,
+    SEEDIVBuilder,
     make_dataloaders,
+    leave_one_session_out_splits,
+    subject_stratified_splits,
 )
 
 __all__ = [
     "EEGDataset", "SpeechDataset", "EarlyFusionDataset", "LateFusionDataset",
-    "DatasetBuilder", "load_all_subjects", "make_dataloaders",
+    "SEEDIVBuilder",
+    "make_dataloaders",
+    "leave_one_session_out_splits",
+    "subject_stratified_splits",
 ]

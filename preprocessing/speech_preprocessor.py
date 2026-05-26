@@ -1,54 +1,41 @@
-"""Speech preprocessing: Wiener filter → MFCC + CHROMA + MEL (180-D per window)."""
+"""
+Speech preprocessing for RAVDESS (Wav2Vec 2.0 path + acoustic GA features).
+
+RAVDESS recordings are at 48 kHz → resampled to 16 kHz for Wav2Vec2.
+Acoustic GA features: MFCC (40) + CHROMA (12) + MEL (128) = 180-D.
+"""
 
 import numpy as np
-import librosa
 from scipy.signal import wiener
 from typing import Optional
 
+try:
+    import librosa
+    _LIBROSA = True
+except ImportError:
+    _LIBROSA = False
+
 
 def apply_wiener_filter(signal: np.ndarray, mysize: int = 5) -> np.ndarray:
-    """Wiener filter for noise suppression on a 1-D waveform."""
     return wiener(signal, mysize=mysize).astype(np.float32)
 
 
-def extract_mfcc(
-    signal: np.ndarray,
-    sr: int,
-    n_mfcc: int = 40,
-    n_fft: int = 512,
-    hop_length: int = 256,
-) -> np.ndarray:
-    """Return time-averaged MFCC vector (n_mfcc,)."""
+def extract_mfcc(signal, sr, n_mfcc=40, n_fft=512, hop_length=256):
     mfcc = librosa.feature.mfcc(y=signal, sr=sr, n_mfcc=n_mfcc,
                                  n_fft=n_fft, hop_length=hop_length)
-    return mfcc.mean(axis=1).astype(np.float32)  # (n_mfcc,)
+    return mfcc.mean(axis=1).astype(np.float32)
 
 
-def extract_chroma(
-    signal: np.ndarray,
-    sr: int,
-    n_chroma: int = 12,
-    n_fft: int = 512,
-    hop_length: int = 256,
-) -> np.ndarray:
-    """Return time-averaged chroma vector (n_chroma,)."""
+def extract_chroma(signal, sr, n_chroma=12, n_fft=512, hop_length=256):
     chroma = librosa.feature.chroma_stft(y=signal, sr=sr, n_chroma=n_chroma,
                                           n_fft=n_fft, hop_length=hop_length)
-    return chroma.mean(axis=1).astype(np.float32)  # (n_chroma,)
+    return chroma.mean(axis=1).astype(np.float32)
 
 
-def extract_mel(
-    signal: np.ndarray,
-    sr: int,
-    n_mel: int = 128,
-    n_fft: int = 512,
-    hop_length: int = 256,
-) -> np.ndarray:
-    """Return time-averaged log-Mel spectrogram vector (n_mel,)."""
+def extract_mel(signal, sr, n_mel=128, n_fft=512, hop_length=256):
     mel = librosa.feature.melspectrogram(y=signal, sr=sr, n_mels=n_mel,
                                           n_fft=n_fft, hop_length=hop_length)
-    log_mel = librosa.power_to_db(mel)
-    return log_mel.mean(axis=1).astype(np.float32)  # (n_mel,)
+    return librosa.power_to_db(mel).mean(axis=1).astype(np.float32)
 
 
 def extract_acoustic_features(
@@ -57,60 +44,18 @@ def extract_acoustic_features(
     n_mfcc: int = 40,
     n_chroma: int = 12,
     n_mel: int = 128,
-    n_fft: int = 512,
-    hop_length: int = 256,
     apply_wiener: bool = True,
 ) -> np.ndarray:
     """
-    Extract 180-D acoustic feature vector: MFCC (40) + CHROMA (12) + MEL (128).
-
-    Parameters
-    ----------
-    signal : (n_samples,)  — raw 16 kHz waveform
-
-    Returns
-    -------
-    features : (180,)
+    180-D acoustic feature vector from a single waveform segment.
+    Signal should already be resampled to sr (16 kHz).
     """
+    if not _LIBROSA:
+        raise ImportError("librosa required: pip install librosa")
+
+    signal = signal.astype(np.float32)
     if signal.ndim > 1:
         signal = signal.mean(axis=0)
-    signal = signal.astype(np.float32)
-
-    if apply_wiener:
-        signal = apply_wiener_filter(signal)
-
-    # Normalise amplitude
-    peak = np.abs(signal).max()
-    if peak > 0:
-        signal = signal / peak
-
-    mfcc = extract_mfcc(signal, sr, n_mfcc, n_fft, hop_length)
-    chroma = extract_chroma(signal, sr, n_chroma, n_fft, hop_length)
-    mel = extract_mel(signal, sr, n_mel, n_fft, hop_length)
-
-    return np.concatenate([mfcc, chroma, mel])  # (180,)
-
-
-def extract_wav2vec_input(
-    signal: np.ndarray,
-    sr: int = 16000,
-    target_sr: int = 16000,
-    apply_wiener: bool = True,
-) -> np.ndarray:
-    """
-    Prepare raw waveform for Wav2Vec 2.0 input.
-    Resamples if needed, applies Wiener filter, normalises to [-1, 1].
-
-    Returns
-    -------
-    waveform : (n_samples,)  float32
-    """
-    if signal.ndim > 1:
-        signal = signal.mean(axis=0)
-    signal = signal.astype(np.float32)
-
-    if sr != target_sr:
-        signal = librosa.resample(signal, orig_sr=sr, target_sr=target_sr)
 
     if apply_wiener:
         signal = apply_wiener_filter(signal)
@@ -119,11 +64,33 @@ def extract_wav2vec_input(
     if peak > 0:
         signal = signal / peak
 
+    n_fft = min(512, len(signal))
+    hop   = n_fft // 2
+
+    mfcc   = extract_mfcc(signal, sr, n_mfcc, n_fft, hop)
+    chroma = extract_chroma(signal, sr, n_chroma, n_fft, hop)
+    mel    = extract_mel(signal, sr, n_mel, n_fft, hop)
+
+    return np.concatenate([mfcc, chroma, mel])   # (180,)
+
+
+def prepare_wav2vec_input(signal: np.ndarray) -> np.ndarray:
+    """
+    Normalise pre-resampled 16 kHz waveform for Wav2Vec 2.0 input.
+    Expects signal already at 16 kHz (RAVDESS resampled by ravdess_loader).
+    """
+    signal = signal.astype(np.float32)
+    if signal.ndim > 1:
+        signal = signal.mean(axis=0)
+    signal = apply_wiener_filter(signal)
+    peak = np.abs(signal).max()
+    if peak > 0:
+        signal = signal / peak
     return signal
 
 
 class SpeechPreprocessor:
-    """Full speech preprocessing pipeline — produces both GA features and Wav2Vec input."""
+    """Extract 180-D acoustic GA features from a pre-resampled 16 kHz waveform."""
 
     def __init__(
         self,
@@ -131,49 +98,24 @@ class SpeechPreprocessor:
         n_mfcc: int = 40,
         n_chroma: int = 12,
         n_mel: int = 128,
-        segment_length: float = 1.0,
-        n_fft: int = 512,
-        hop_length: int = 256,
+        segment_length: float = 3.0,   # RAVDESS recordings are ~3-5 s
     ):
         self.sr = sr
         self.n_mfcc = n_mfcc
         self.n_chroma = n_chroma
         self.n_mel = n_mel
-        self.segment_len = int(segment_length * sr)
-        self.n_fft = n_fft
-        self.hop_length = hop_length
+        self.seg_len = int(segment_length * sr)
 
     def extract_features(self, signal: np.ndarray) -> np.ndarray:
         """
-        Extract 180-D features per segment.
-
-        Parameters
-        ----------
-        signal : (n_samples,)
-
-        Returns
-        -------
-        features : (n_segments, 180)
+        Return (1, 180) acoustic features for a single RAVDESS recording.
+        The whole recording is used as one segment (RAVDESS clips are short).
         """
-        n_samples = len(signal)
-        n_segments = n_samples // self.segment_len
-        if n_segments == 0:
-            n_segments = 1
-            signal = np.pad(signal, (0, self.segment_len - n_samples))
-
-        features = []
-        for i in range(n_segments):
-            seg = signal[i * self.segment_len: (i + 1) * self.segment_len]
-            if len(seg) < self.segment_len:
-                seg = np.pad(seg, (0, self.segment_len - len(seg)))
-            feat = extract_acoustic_features(
-                seg, self.sr, self.n_mfcc, self.n_chroma, self.n_mel,
-                self.n_fft, self.hop_length,
-            )
-            features.append(feat)
-
-        return np.stack(features)  # (n_segments, 180)
+        if len(signal) < self.seg_len:
+            signal = np.pad(signal, (0, self.seg_len - len(signal)))
+        feat = extract_acoustic_features(signal[: self.seg_len], self.sr,
+                                         self.n_mfcc, self.n_chroma, self.n_mel)
+        return feat[np.newaxis, :]   # (1, 180)
 
     def prepare_wav2vec_input(self, signal: np.ndarray) -> np.ndarray:
-        """Return cleaned, normalised waveform for Wav2Vec 2.0."""
-        return extract_wav2vec_input(signal, self.sr, self.sr)
+        return prepare_wav2vec_input(signal)
